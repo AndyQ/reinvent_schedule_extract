@@ -19,17 +19,14 @@ from time import sleep
 from bs4 import BeautifulSoup
 import re
 
-# Set username and password for reinvent event website
-USERNAME = 'YOUR USERNAME HERE'
-PASSWORD = 'YOUR PASSWORD HERE'
+from config import USERNAME, PASSWORD
 
 # Set to True to download the data from the web OR False to use a pre-downloaded set of data
 # useful if you want to change the parsed datasets
-downloadDataFromWeb = False
+downloadDataFromWeb = True
 
 # Chrome web driver path
 CHROME_DRIVER = './chromedriver'
-
 
 # Venetian, Encore, Aria, MGM, Mirage, Bellagio, Vdara
 VENUE_CODES = [22188,728,22191,22190,22583,22584,24372]

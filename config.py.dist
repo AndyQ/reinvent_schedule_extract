@@ -1,0 +1,3 @@
+# Set username and password for reinvent event website
+USERNAME = 'YOUR USERNAME HERE'
+PASSWORD = 'YOUR PASSWORD HERE'
