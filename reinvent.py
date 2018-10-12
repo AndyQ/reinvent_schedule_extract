@@ -15,9 +15,13 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 import os
+import shutil
 from time import sleep
 from bs4 import BeautifulSoup
 import re
+from datetime import datetime
+import json
+
 
 from config import USERNAME, PASSWORD
 
@@ -41,6 +45,7 @@ chrome_options = Options()
 #chrome_options.add_argument("--headless")
 
 content_to_parse = ''
+events = []
 
 def login(chrome_driver, username, password):
     '''
@@ -76,22 +81,19 @@ def loadSessonContentsFromURL( driver, venue, day ):
             # Find the Get More Results link and click it to load next sessions
             get_results_btn = driver.find_element_by_link_text("Get More Results")
             get_results_btn.click()
-            sleep(3)
+            sleep(1)
         except NoSuchElementException as e:
             more_results = False
 
     # Go through all the links and expand the scheduling options
-    # this loads the schedule times (and means we don't need to mess with the AJAX call which
-    # requires sessions and stuff)
-    sessions = driver.find_element_by_id('searchResult')
-    sessionTimes = sessions.find_elements_by_xpath( "//*[contains(@onclick,'showAvailSessions')]")
-    print( "Expanding {} sessions".format(len(sessionTimes)))
-    for link in sessionTimes:
-        link.click()
-        sleep(0.250)
+    progress = driver.execute_script('''
+    links = document.querySelectorAll(".expandSessionImg:not(.expanded)");
+    links.forEach(link => link.click());
+    ''')
+    sleep(2)
 
     # write to <venueid>.txt
-    with open( "{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]), "w") as out:
+    with open( "./output/webdata/{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]), "w") as out:
         out.write( driver.page_source )
 
 
@@ -102,13 +104,14 @@ def loadSessonContentsFromFile( ):
     # looking at the lists day by day.
     for venue in range(0, len(VENUE_CODES)):
         for day in range(0, len(DAY_IDS)):
-            with open( "{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]), "r") as input:
+            with open( "./output/webdata/{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]), "r") as input:
                 data = input.read()
-                extractSessionsFromHTML( data, "sessions_{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]) )
+                extractSessionsFromHTML( data, "./output/csv/sessions_{}_{}.csv".format(VENUE_NAMES[venue], DAY_NAMES[day]) )
                 #content_to_parse = content_to_parse + data
 
 
 def extractSessionsFromHTML( html, outputFile ):
+    global events
     # Start the process of grabbing out relevant session information and writing to a file
     #soup = BeautifulSoup(content_to_parse, "html5lib")
     soup = BeautifulSoup(html, "html.parser")
@@ -128,7 +131,7 @@ def extractSessionsFromHTML( html, outputFile ):
     file = open(outputFile,"w")
 
     # Create a header row for the file. Note the PIPE (|) DELIMITER.
-    file.write("Session Number,Session Title,Session Level,Session Type,Session Speakers,Session Interest,Day,Start Time,End Time,Building,Room\n")
+    file.write("Session Number,Session Title,Session Desc,Session Level,Session Type,Session Speakers,Session Interest,Day,Start Time,End Time,Building,Room\n")
 
     # For each session, pull out the relevant fields and write them to the sessions.txt file.
     unableToGet = []
@@ -172,6 +175,9 @@ def extractSessionsFromHTML( html, outputFile ):
         session_title = session_soup.find("span", class_="title")
         session_title = session_title.string.rstrip().replace( "\"", "'" )
 
+        session_desc = session_soup.find( "span", class_="abstract")
+        session_desc = session_desc.text.rstrip().replace( "\"", "'" ).replace( "\n", " " ).replace( " View More", "" )
+
         session_type = session_soup.find( "small", class_="type").string
 
         session_speakers = ""
@@ -193,13 +199,41 @@ def extractSessionsFromHTML( html, outputFile ):
         else:
             session_interest = True
 
-        write_contents = "{},\"{}\",{},{},\"{}\",{},{},{},{},{},{}".format(session_number, session_title, session_level, session_type, session_speakers, session_interest, session_timing['day'], session_timing['start_time'], session_timing['end_time'], session_timing['building'], session_timing['room'])
+        try:
+            startDateStr = '{} 2018 {}'.format(session_timing['day'], session_timing['start_time']).strip()
+            endDateStr = '{} 2018 {}'.format(session_timing['day'], session_timing['end_time']).strip()
+            startDate = datetime.strptime(startDateStr, '%b %d %Y %I:%M %p')
+            endDate = datetime.strptime(endDateStr, '%b %d %Y %I:%M %p')
+            startTimeEpoch = startDate.timestamp()
+            duration = (endDate - startDate).total_seconds() / 60.0
+        except:
+            print("[{}] - [{}]".format(startDateStr, endDateStr))
+            raise
+
+        item = {
+            "title" : session_number,
+            "desc" : session_title,
+            "detail" : session_desc,
+            "level" : session_level,
+            "type" : session_type,
+            "speakers" : session_speakers,
+            "eventKind" : 1,
+            "interested" : "NotInterested",
+            "scheduledDate" : int(startTimeEpoch),
+            "duration" : int(duration),
+            "building" : session_timing['building'],
+            "room" : session_timing['room'],
+        }
+        events.append( item )
+
+        write_contents = "{},\"{}\",\"{}\",{},{},\"{}\",{},{},{},{},{},{}".format(session_number, session_title, session_desc, session_level, session_type, session_speakers, session_interest, session_timing['day'], session_timing['start_time'], session_timing['end_time'], session_timing['building'], session_timing['room'])
         file.write(write_contents.strip() + "\n")
 
         # Print the session title for each session written to the file
         #print (session_title.strip())
 
     file.close()
+
 
     print( "------------")
     print( "Unable to get details for the following sessions:")
@@ -213,12 +247,42 @@ def extractSessionsFromHTML( html, outputFile ):
 if downloadDataFromWeb == True:
 
     # Login to the reinvent website
-    for venue in range(0, len(VENUE_CODES):
+    for venue in range(0, len(VENUE_CODES)):
         driver = webdriver.Chrome(chrome_options=chrome_options, executable_path=CHROME_DRIVER)
         login(driver, USERNAME, PASSWORD)
         for day in range(0, len(DAY_IDS)):
             loadSessonContentsFromURL(driver, venue, day )
         driver.close() 
 
-loadSessonContentsFromFile()
+def main():
 
+    # Create output folders if necessary
+    if not os.path.isdir("./output"):
+        os.makedirs( "./output" )
+
+    # Remove and recreate the webdata folder if we are downloading data
+    if downloadDataFromWeb == True:
+        shutil.rmtree("./output/webdata")
+        os.makedirs( "./output/webdata" )
+
+    # Always remove csv output folder as we will always write data here
+    if os.path.isdir("./output/csv/"):
+        shutil.rmtree("./output/csv")
+    os.makedirs( "./output/csv" )
+
+    if os.path.exists("./output/sessions.csv"):
+        os.remove("./output/sessions.csv")
+    if os.path.isdir("./output/sessions.json"):
+        os.remove("./output/sessions.json")
+
+    loadSessonContentsFromFile()
+
+    # create single sessions.csv file
+    os.system("cat ./output/csv/*.csv >> ./output/sessions.csv")     
+
+    # write out to sessions.json
+    with open("./output/sessions.json", 'w') as outf:
+        json.dump(events, outf)
+
+if __name__ == "__main__":
+    main()
