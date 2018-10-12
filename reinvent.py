@@ -27,7 +27,7 @@ from config import USERNAME, PASSWORD
 
 # Set to True to download the data from the web OR False to use a pre-downloaded set of data
 # useful if you want to change the parsed datasets
-downloadDataFromWeb = False
+downloadDataFromWeb = True
 
 # Chrome web driver path
 CHROME_DRIVER = './chromedriver'
@@ -106,11 +106,11 @@ def loadSessonContentsFromFile( ):
         for day in range(0, len(DAY_IDS)):
             with open( "./output/webdata/{}_{}.txt".format(VENUE_NAMES[venue], DAY_NAMES[day]), "r") as input:
                 data = input.read()
-                extractSessionsFromHTML( data, "./output/csv/sessions_{}_{}.csv".format(VENUE_NAMES[venue], DAY_NAMES[day]) )
+                extractSessionsFromHTML( VENUE_NAMES[venue], DAY_NAMES[day], data, "./output/csv/sessions_{}_{}.csv".format(VENUE_NAMES[venue], DAY_NAMES[day]) )
                 #content_to_parse = content_to_parse + data
 
 
-def extractSessionsFromHTML( html, outputFile ):
+def extractSessionsFromHTML( venueName, dayName, html, outputFile ):
     global events
     # Start the process of grabbing out relevant session information and writing to a file
     #soup = BeautifulSoup(content_to_parse, "html5lib")
@@ -125,7 +125,7 @@ def extractSessionsFromHTML( html, outputFile ):
     # Grab all of the sessionRows from the final set of HTML and work only with that
     sessions = soup.find_all("div", class_="sessionRow")
 
-    print( "Found {} sessions".format(len(sessions)))
+    print( "Found {} sessions for {} on {}".format(len(sessions), venueName, dayName))
 
     # Open a blank text file to write sessions to
     file = open(outputFile,"w")
@@ -142,11 +142,24 @@ def extractSessionsFromHTML( html, outputFile ):
         session_id = session_id[session_id.find("_")+1:]
 
         # Grab the schedule timings
-        text = session_soup.find( "ul", class_="availableSessions").text
-        text = text[37:]
+        text = ""
+        item = session_soup.find( "ul", class_="availableSessions")
+        if item != None:
+            text = item.text
+
+        reserved = False
+        if text.startswith("Unreserve seat"):
+            reserved = True
+        text = text.replace("You have a conflict with this session time in your schedule.", "" )
+        text = text.replace("Add to Waitlist", "" )
+        text = text.replace("Remove from Waitlist", "" )
+        text = text.replace("Reserve seat", "" )
+        text = text.replace("Unreserve seat", "" )
+        #print( "{} - [{}]".format( session_id, text ) )
+        #text = text[37:]
         #print( "{} - [{}]".format( session_id, text ) )
 
-        match = re.search("([^,]*), ([^,]*), ([^-]*)- ([^-–]*). ([^,]*), ([^,]*), (.*)", text, re.DOTALL | re.MULTILINE)
+        match = re.search("([^,]*), ([^,]*), ([^-]*)- ([^-–]*). ([^,]*), ([^,]*)[, ]*(.*)", text, re.DOTALL | re.MULTILINE)
         if match == None:
             unableToGet.append( session_id )
             session_timing = {
@@ -160,12 +173,15 @@ def extractSessionsFromHTML( html, outputFile ):
             groups = match.groups()
 
             session_timing = {
-                "start_time": groups[2],
-                "end_time": groups[3],
-                "building": groups[4],
-                "room": "{} - {}".format(groups[5], groups[6].replace( ",", " - ")),
-                "day": "{}".format(groups[1])
+                "start_time": groups[2].strip(),
+                "end_time": groups[3].strip(),
+                "building": groups[4].strip(),
+                "room": "{} - {}".format(groups[5].strip(), groups[6].strip().replace( ",", " - ")),
+                "day": "{}".format(groups[1].strip())
             }
+
+        if session_timing["start_time"] == "Unknown":
+            continue
 
         session_number = session_soup.find("span", class_="abbreviation")
         session_number = session_number.string.replace(" - ", "")
@@ -210,6 +226,13 @@ def extractSessionsFromHTML( html, outputFile ):
             print("[{}] - [{}]".format(startDateStr, endDateStr))
             raise
 
+        if session_interest == True:
+            interested = "Interested"
+            eventKind = 0
+        else:
+            interested = "NotInterested"
+            eventKind = 1
+
         item = {
             "title" : session_number,
             "desc" : session_title,
@@ -217,8 +240,8 @@ def extractSessionsFromHTML( html, outputFile ):
             "level" : session_level,
             "type" : session_type,
             "speakers" : session_speakers,
-            "eventKind" : 1,
-            "interested" : "NotInterested",
+            "eventKind" : eventKind,
+            "interested" : interested,
             "scheduledDate" : int(startTimeEpoch),
             "duration" : int(duration),
             "building" : session_timing['building'],
@@ -235,27 +258,18 @@ def extractSessionsFromHTML( html, outputFile ):
     file.close()
 
 
-    print( "------------")
-    print( "Unable to get details for the following sessions:")
-    for session in unableToGet:
-        print( "     {}".format( session ) )
+    if len(unableToGet) > 0:
+        print( "------------")
+        print( "Unable to get details for the following sessions:")
+        for session in unableToGet:
+            print( "     {}".format( session ) )
 
 
 # If we are downloading from web, due to interesting session issues that affect the venue selection
 # but not the day, kill the driver when changing venues and write all the data to disk
 
-if downloadDataFromWeb == True:
-
-    # Login to the reinvent website
-    for venue in range(0, len(VENUE_CODES)):
-        driver = webdriver.Chrome(chrome_options=chrome_options, executable_path=CHROME_DRIVER)
-        login(driver, USERNAME, PASSWORD)
-        for day in range(0, len(DAY_IDS)):
-            loadSessonContentsFromURL(driver, venue, day )
-        driver.close() 
 
 def main():
-
     # Create output folders if necessary
     if not os.path.isdir("./output"):
         os.makedirs( "./output" )
@@ -272,8 +286,18 @@ def main():
 
     if os.path.exists("./output/sessions.csv"):
         os.remove("./output/sessions.csv")
-    if os.path.isdir("./output/sessions.json"):
+    if os.path.exists("./output/sessions.json"):
         os.remove("./output/sessions.json")
+
+    if downloadDataFromWeb == True:
+
+        # Login to the reinvent website
+        for venue in range(0, len(VENUE_CODES)):
+            driver = webdriver.Chrome(chrome_options=chrome_options, executable_path=CHROME_DRIVER)
+            login(driver, USERNAME, PASSWORD)
+            for day in range(0, len(DAY_IDS)):
+                loadSessonContentsFromURL(driver, venue, day )
+            driver.close() 
 
     loadSessonContentsFromFile()
 
